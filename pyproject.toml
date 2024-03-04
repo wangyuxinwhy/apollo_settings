@@ -1,0 +1,58 @@
+[tool.poetry]
+name = "appolo-settings"
+version = "0.1.0"
+description = "Apollo Config & Pydantic Settings"
+authors = ["wangyuxin <wangyuxin@mokahr.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "appolo_settings"}]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+requests = "^2.0.0"
+pydantic = "^2.0.0"
+pydantic-settings = "^2.0.0"
+
+[tool.ruff]
+line-length = 128
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "C",  # flake8-comprehensions
+    "B",  # flake8-bugbear
+    "N",
+    "A",
+    "T",
+    "PT",
+    "RET",
+    "TRY",
+]
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "B905",  # zip strict
+    "C901",  # too complex
+    "A003",  # shadow builtin 
+    "ANN1",  # self and cls
+    "ANN401", # Dynamically typed expressions (typing.Any) are disallowed in
+    "TRY003", # Avoid specifying long messages outside the exception class
+    "PLC0414", # reimport
+]
+exclude = ["playground", "api_docs"]
+target-version = "py38"
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.pyright]
+reportMissingTypeStubs=false
+
+[tool.poetry.group.dev.dependencies]
+pyright = "^1.1.310"
+ruff = "^0.1.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
