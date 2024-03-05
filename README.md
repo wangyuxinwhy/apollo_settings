@@ -44,3 +44,5 @@ print(settings)
 print(engine.rerank_model)
 
 ```
+
+AppoloClient code from @[crowod](https://github.com/crowod)
