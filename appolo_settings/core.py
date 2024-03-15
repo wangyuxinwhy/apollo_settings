@@ -1,8 +1,9 @@
 import os
-from typing import Any, Callable, ClassVar, Iterable, List, Literal, Optional, Set, Union
+from typing import Any, Callable, ClassVar, Iterable, List, Optional, Set, Union
 
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing_extensions import Self
 
 from appolo_settings.client import ApolloClient, AppoloConfig, AppoloSubscriber
 
@@ -17,9 +18,13 @@ class AppoloSettingsConfigDict(SettingsConfigDict, total=False):
 
 
 class UpdateAction(BaseModel):
-    fields: Union[Set[str], Literal['none', 'all']]
+    watched_fields: Union[Set[str], None]
     action: Callable
     priority: int = 0
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.watched_fields is not None and len(self.watched_fields) == 0:
+            raise ValueError('Watched fields can not be empty')
 
 
 class AppoloSettings(BaseSettings):
@@ -60,15 +65,18 @@ class AppoloSettings(BaseSettings):
                     updated_fields.add(field)
                     setattr(self, field, appolo_value.value)
         for update_action in sorted(self._update_actions, key=lambda x: x.priority, reverse=True):
-            if update_action.fields == 'all':
+            if update_action.watched_fields is None:
                 update_action.action(self)
-            elif update_action.fields == 'none':
-                update_action.action()
-            elif update_action.fields & updated_fields:
-                update_action.action(**{field: getattr(self, field) for field in update_action.fields})
+            elif update_action.watched_fields & updated_fields:
+                update_action.action(self)
 
-    def on_change(self, action: Callable, fields: Union[Iterable[str], Literal['all', 'none']], priority: int = 0) -> None:
-        self._update_actions.append(UpdateAction(fields=set(fields), action=action, priority=priority))
+    def on_change(self, action: Callable[[Self], None], watched_fields: Union[Iterable[str], None], priority: int = 0) -> None:
+        watched_fields = None if watched_fields is None else set(watched_fields)
+        if watched_fields is not None:
+            if not (set(watched_fields) & set(self.model_fields)):
+                raise ValueError(f'watched_fields {watched_fields} not in model fields {self.model_fields.keys()}')
+
+        self._update_actions.append(UpdateAction(watched_fields=watched_fields, action=action, priority=priority))
 
     model_config: ClassVar[AppoloSettingsConfigDict] = AppoloSettingsConfigDict(
         extra='forbid',
