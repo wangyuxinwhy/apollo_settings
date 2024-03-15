@@ -30,8 +30,8 @@ class ChatEninge:
     def __init__(self, rerank_model: str) -> None:
         self.rerank_model = rerank_model
     
-    def update_model(self, rerank_model: str):
-        self.rerank_model = rerank_model
+    def update_model(self, settings: MySettings):
+        self.rerank_model = settings.rerank_model
 
 
 settings = MySettings()
