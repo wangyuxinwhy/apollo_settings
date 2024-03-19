@@ -10,22 +10,22 @@ import requests
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
-AppoloConfig = Dict[str, 'AppoloValue']
+ApolloConfig = Dict[str, 'ApolloValue']
 DictConfig = Dict[str, str]
 
 
-class AppoloValue(BaseModel):
+class ApolloValue(BaseModel):
     value: str
     update: bool
 
 
-class AppoloServerReponse(BaseModel):
+class ApolloServerReponse(BaseModel):
     release_key: str
     config: DictConfig
 
 
-class AppoloSubscriber(BaseModel):
-    action: Callable[[AppoloConfig], None]
+class ApolloSubscriber(BaseModel):
+    action: Callable[[ApolloConfig], None]
     priority: int = 0
     namespace: str = 'application'
 
@@ -39,7 +39,7 @@ class ApolloClient:
         namespaces: Sequence[str] = ('application',),
         polling_intervel: int = 2,
         polling_timeout: int = 90,
-        subscribers: list[AppoloSubscriber] | None = None,
+        subscribers: list[ApolloSubscriber] | None = None,
     ):
         self.meta_url = meta_url
         self.app_id = app_id
@@ -53,11 +53,11 @@ class ApolloClient:
         self.alive = True
         self.notification_id_map: dict[str, int] = {}
 
-        self.configs: Dict[str, AppoloConfig] = {}
+        self.configs: Dict[str, ApolloConfig] = {}
 
     def request_config_server(
         self, namespace: str = 'application', release_key: str | None = None, messages=None
-    ) -> AppoloServerReponse:
+    ) -> ApolloServerReponse:
         api = f'{self.meta_url}/configs/{self.app_id}/{self.cluster}/{namespace}'
 
         if release_key and messages:
@@ -71,9 +71,9 @@ class ApolloClient:
         response = requests.get(api, params=params, timeout=3)
         response.raise_for_status()
         response = response.json()
-        return AppoloServerReponse(release_key=response['releaseKey'], config=response['configurations'])
+        return ApolloServerReponse(release_key=response['releaseKey'], config=response['configurations'])
 
-    def update(self, server_response: AppoloServerReponse, namespace: str) -> None:
+    def update(self, server_response: ApolloServerReponse, namespace: str) -> None:
         if namespace not in self.configs:
             self.configs[namespace] = {}
 
@@ -82,12 +82,12 @@ class ApolloClient:
                 current_value = self.configs[namespace][key]
                 if current_value.value != value_in_server:
                     logger.debug(f'Update | {key}: {current_value.value} -> {value_in_server}')
-                    self.configs[namespace][key] = AppoloValue(value=value_in_server, update=True)
+                    self.configs[namespace][key] = ApolloValue(value=value_in_server, update=True)
                 else:
-                    self.configs[namespace][key] = AppoloValue(value=value_in_server, update=False)
+                    self.configs[namespace][key] = ApolloValue(value=value_in_server, update=False)
             else:
                 logger.debug(f'Add | {key}: {value_in_server}')
-                self.configs[namespace][key] = AppoloValue(value=value_in_server, update=True)
+                self.configs[namespace][key] = ApolloValue(value=value_in_server, update=True)
 
         self.notify()
 
@@ -104,7 +104,7 @@ class ApolloClient:
             else:
                 subscriber.action(self.configs[subscriber.namespace])
 
-    def add_subscriber(self, subscriber: AppoloSubscriber) -> None:
+    def add_subscriber(self, subscriber: ApolloSubscriber) -> None:
         self._subscribers.append(subscriber)
         self.check_subscribers()
 

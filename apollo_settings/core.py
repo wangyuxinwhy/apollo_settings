@@ -5,10 +5,10 @@ from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing_extensions import Self
 
-from appolo_settings.client import ApolloClient, AppoloConfig, AppoloSubscriber
+from apollo_settings.client import ApolloClient, ApolloConfig, ApolloSubscriber
 
 
-class AppoloSettingsConfigDict(SettingsConfigDict, total=False):
+class ApolloSettingsConfigDict(SettingsConfigDict, total=False):
     meta_url: Optional[str]
     app_id: str
     cluster: str
@@ -27,43 +27,43 @@ class UpdateAction(BaseModel):
             raise ValueError('Watched fields can not be empty')
 
 
-class AppoloSettings(BaseSettings):
-    appolo_client: Optional[ApolloClient] = None
+class ApolloSettings(BaseSettings):
+    apollo_client: Optional[ApolloClient] = None
     _update_actions: List[UpdateAction] = []
 
     def model_post_init(self, __context: Any) -> None:
         namespace = self.model_config.get('namespace', 'application')
-        if self.appolo_client is None:
-            appolo_client_init_kwargs = {}
-            meta_url = self.model_config.get('meta_url') or os.environ.get('APPOLO_META_URL')
+        if self.apollo_client is None:
+            apollo_client_init_kwargs = {}
+            meta_url = self.model_config.get('meta_url') or os.environ.get('APOLLO_META_URL')
             if meta_url is None:
-                raise ValueError('appolo meta_url is required')
-            appolo_client_init_kwargs['meta_url'] = meta_url
+                raise ValueError('apollo meta_url is required')
+            apollo_client_init_kwargs['meta_url'] = meta_url
             app_id = self.model_config.get('app_id')
             if app_id is None:
-                raise ValueError('appolo app_id is required')
-            appolo_client_init_kwargs['app_id'] = app_id
-            appolo_client_init_kwargs['namespaces'] = [namespace]
+                raise ValueError('apollo app_id is required')
+            apollo_client_init_kwargs['app_id'] = app_id
+            apollo_client_init_kwargs['namespaces'] = [namespace]
             optional_keys = {'cluster', 'polling_interval', 'polling_timeout'}
             for key in optional_keys:
                 if key in self.model_config:
-                    appolo_client_init_kwargs[key] = self.model_config[key]
-            self._appolo_client = ApolloClient(**appolo_client_init_kwargs)
+                    apollo_client_init_kwargs[key] = self.model_config[key]
+            self._apollo_client = ApolloClient(**apollo_client_init_kwargs)
         else:
-            if namespace not in self.appolo_client.namespaces:
-                raise ValueError(f'{namespace} not in appolo client namespaces: {self.appolo_client.namespaces}')
+            if namespace not in self.apollo_client.namespaces:
+                raise ValueError(f'{namespace} not in apollo client namespaces: {self.apollo_client.namespaces}')
 
-        subscriber = AppoloSubscriber(namespace=namespace, action=self._update_with_appolo_config)
-        self._appolo_client.add_subscriber(subscriber)
-        self._appolo_client.start_polling()
+        subscriber = ApolloSubscriber(namespace=namespace, action=self._update_with_apollo_config)
+        self._apollo_client.add_subscriber(subscriber)
+        self._apollo_client.start_polling()
 
-    def _update_with_appolo_config(self, config: AppoloConfig) -> None:
+    def _update_with_apollo_config(self, config: ApolloConfig) -> None:
         updated_fields = set()
         for field in self.model_fields:
-            if (appolo_value := config.get(field, None)) is not None:
-                if appolo_value.update:
+            if (apollo_value := config.get(field, None)) is not None:
+                if apollo_value.update:
                     updated_fields.add(field)
-                    setattr(self, field, appolo_value.value)
+                    setattr(self, field, apollo_value.value)
         for update_action in sorted(self._update_actions, key=lambda x: x.priority, reverse=True):
             if update_action.watched_fields is None:
                 update_action.action(self)
@@ -78,7 +78,7 @@ class AppoloSettings(BaseSettings):
 
         self._update_actions.append(UpdateAction(watched_fields=watched_fields, action=action, priority=priority))
 
-    model_config: ClassVar[AppoloSettingsConfigDict] = AppoloSettingsConfigDict(
+    model_config: ClassVar[ApolloSettingsConfigDict] = ApolloSettingsConfigDict(
         extra='forbid',
         arbitrary_types_allowed=True,
         validate_default=True,

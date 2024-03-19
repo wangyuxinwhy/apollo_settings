@@ -1,21 +1,21 @@
-# appolo_settings
+# apollo_settings
 Apollo Config & Pydantic Settings
 
 # Install
 
 ```bash
-pip install appolo-settings
+pip install apollo-settings
 ```
 
 # Usage
 
 ```python
 import time
-from appolo_settings import AppoloSettings, AppoloSettingsConfigDict
+from apollo_settings import ApolloSettings, ApolloSettingsConfigDict
 
 
-class MySettings(AppoloSettings):
-    model_config = AppoloSettingsConfigDict(
+class MySettings(ApolloSettings):
+    model_config = ApolloSettingsConfigDict(
         meta_url='your_meta_url',
         app_id='your_app_id',
     )
@@ -45,4 +45,5 @@ print(engine.rerank_model)
 
 ```
 
-AppoloClient code from @[crowod](https://github.com/crowod)
+ApolloClient code from @[crowod](https://github.com/crowod)
+

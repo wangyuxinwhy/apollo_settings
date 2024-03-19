@@ -1,11 +1,11 @@
 [tool.poetry]
-name = "appolo-settings"
+name = "apollo-settings"
 version = "0.2.0"
 description = "Apollo Config & Pydantic Settings"
 authors = ["wangyuxin <wangyuxin@mokahr.com>"]
 license = "MIT"
 readme = "README.md"
-packages = [{include = "appolo_settings"}]
+packages = [{include = "apollo_settings"}]
 
 [tool.poetry.dependencies]
 python = "^3.8"
