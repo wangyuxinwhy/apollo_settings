@@ -15,14 +15,14 @@ from apollo_settings import ApolloSettings, ApolloSettingsConfigDict
 
 
 class MySettings(ApolloSettings):
+    openai_api_base: str = 'test'
+    rerank_model: str = 'test'
+    rerank_threshold: float = 0.2
+
     model_config = ApolloSettingsConfigDict(
         meta_url='your_meta_url',
         app_id='your_app_id',
     )
-
-    openai_api_base: str = 'test'
-    rerank_model: str = 'test'
-    rerank_threshold: float = 0.2
 
 
 class ChatEninge:
@@ -42,7 +42,6 @@ print(engine.rerank_model)
 time.sleep(1)
 print(settings)
 print(engine.rerank_model)
-
 ```
 
 ApolloClient code from @[crowod](https://github.com/crowod)
