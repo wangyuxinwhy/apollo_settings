@@ -1,13 +1,16 @@
-# apollo_settings
-Apollo Config & Pydantic Settings
+# Apollo Settings
 
-# Install
+A Python library that integrates Apollo Config with Pydantic Settings, enabling dynamic configuration management with automatic change detection and callbacks.
+
+## Installation
 
 ```bash
 pip install apollo-settings
 ```
 
-# Usage
+## Usage
+
+Here's a simple example showing how to use Apollo Settings with automatic configuration updates:
 
 ```python
 import time
@@ -25,7 +28,7 @@ class MySettings(ApolloSettings):
     )
 
 
-class ChatEninge:
+class ChatEngine:
 
     def __init__(self, rerank_model: str) -> None:
         self.rerank_model = rerank_model
@@ -35,7 +38,7 @@ class ChatEninge:
 
 
 settings = MySettings()
-engine = ChatEninge(rerank_model=settings.rerank_model)
+engine = ChatEngine(rerank_model=settings.rerank_model)
 settings.on_change(engine.update_model, fields=['rerank_model'])
 print(settings)
 print(engine.rerank_model)
@@ -44,5 +47,7 @@ print(settings)
 print(engine.rerank_model)
 ```
 
-ApolloClient code from @[crowod](https://github.com/crowod)
+## Credits
+
+ApolloClient code from [@crowod](https://github.com/crowod)
 
