@@ -13,10 +13,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = [
-    "pyright>=1.1.310",
-    "ruff>=0.1.4",
-]
+dev = ["pyright>=1.1.310", "ruff>=0.1.4"]
 
 [tool.uv]
 package = true
@@ -43,7 +40,7 @@ ignore = [
     "B905",    # zip strict
     "C901",    # too complex
     "A003",    # shadow builtin
-    "ANN1",    # self and cls
+    "ANN001",  # self and cls
     "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed in
     "TRY003",  # Avoid specifying long messages outside the exception class
     "PLC0414", # reimport
