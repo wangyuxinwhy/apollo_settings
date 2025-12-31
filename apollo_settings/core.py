@@ -1,3 +1,5 @@
+"""Core module for Apollo Settings integration with Pydantic BaseSettings."""
+
 import logging
 import os
 from contextlib import contextmanager
@@ -24,8 +26,8 @@ from apollo_settings.client import (
     ApolloSubscriber,
 )
 
-_init_apollo_client_context_var = ContextVar[Optional[ApolloClient]](
-    '_init_apollo_client_context_var', default=None
+_init_apollo_client_context_var: ContextVar[Optional[ApolloClient]] = (
+    ContextVar('_init_apollo_client_context_var', default=None)
 )
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,25 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def init_context(value: ApolloClient) -> Iterator[None]:
+    """Context manager for injecting a shared ApolloClient instance.
+
+    Use this to share a single ApolloClient across multiple ApolloSettings
+    instances, avoiding duplicate connections to the Apollo server.
+
+    Args:
+        value: The ApolloClient instance to inject.
+
+    Yields:
+        None. Settings created within this context will use the provided client.
+
+    Example:
+        ```python
+        client = ApolloClient(meta_url='...', app_id='...')
+        with init_context(client):
+            settings1 = MySettings()  # Uses shared client
+            settings2 = OtherSettings()  # Uses same client
+        ```
+    """
     token = _init_apollo_client_context_var.set(value)
     try:
         yield
@@ -41,6 +62,17 @@ def init_context(value: ApolloClient) -> Iterator[None]:
 
 
 class ApolloSettingsConfigDict(SettingsConfigDict, total=False):
+    """Extended SettingsConfigDict with Apollo-specific configuration options.
+
+    Attributes:
+        meta_url: Apollo Config server meta URL.
+        app_id: Application ID registered in Apollo.
+        cluster: Cluster name, defaults to 'default'.
+        namespace: Namespace to load configuration from.
+        polling_interval: Interval between polling requests in seconds.
+        polling_timeout: Timeout for long-polling requests in seconds.
+    """
+
     meta_url: Optional[str]
     app_id: str
     cluster: str
@@ -49,7 +81,9 @@ class ApolloSettingsConfigDict(SettingsConfigDict, total=False):
     polling_timeout: int
 
 
-class UpdateAction(BaseModel):
+class _UpdateAction(BaseModel):
+    """Internal model for tracking configuration change callbacks."""
+
     watched_fields: Union[Set[str], None]
     action: Callable
     priority: int = 0
@@ -60,15 +94,36 @@ class UpdateAction(BaseModel):
 
 
 class ApolloSettings(BaseSettings):
+    """Pydantic BaseSettings integrated with Apollo Config.
+
+    Automatically synchronizes configuration with Apollo Config server
+    and supports callback registration for configuration changes.
+
+    Example:
+        ```python
+        class MySettings(ApolloSettings):
+            database_url: str
+            debug: bool = False
+
+            model_config = ApolloSettingsConfigDict(
+                meta_url='http://apollo-config:8080',
+                app_id='my-app',
+            )
+
+        settings = MySettings()
+        settings.on_change(lambda s: print(f'Debug: {s.debug}'), ['debug'])
+        ```
+    """
+
     _apollo_client: ApolloClient = PrivateAttr()
-    _update_actions: List[UpdateAction] = PrivateAttr(default_factory=list)
+    _update_actions: List[_UpdateAction] = PrivateAttr(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
         namespace = self.model_config.get('namespace', 'application')
         apollo_client = _init_apollo_client_context_var.get()
 
         if apollo_client is None:
-            apollo_client_init_kwargs = {}
+            apollo_client_init_kwargs: dict[str, Any] = {}
             meta_url = self.model_config.get('meta_url') or os.environ.get(
                 'APOLLO_META_URL'
             )
@@ -92,7 +147,8 @@ class ApolloSettings(BaseSettings):
             self._apollo_client = apollo_client
             if namespace not in self._apollo_client.namespaces:
                 raise ValueError(
-                    f'{namespace} not in apollo client namespaces: {self._apollo_client.namespaces}'
+                    f'{namespace} not in apollo client namespaces: '
+                    f'{self._apollo_client.namespaces}'
                 )
 
         subscriber = ApolloSubscriber(
@@ -102,7 +158,7 @@ class ApolloSettings(BaseSettings):
         self._apollo_client.start_polling()
 
     def _update_with_apollo_config(self, config: ApolloConfig) -> None:
-        updated_fields = set()
+        updated_fields: set[str] = set()
         for field in self.model_fields:
             if (apollo_value := config.get(field, None)) is not None:
                 if apollo_value.update:
@@ -122,24 +178,35 @@ class ApolloSettings(BaseSettings):
         watched_fields: Union[Iterable[str], None],
         priority: int = 0,
     ) -> None:
-        watched_fields = (
+        """Register a callback for configuration changes.
+
+        Args:
+            action: Callback function receiving the settings instance.
+            watched_fields: Field names to watch. If None, triggers on any change.
+            priority: Higher priority callbacks execute first.
+
+        Raises:
+            ValueError: If watched_fields contains invalid field names.
+        """
+        watched_fields_set = (
             None if watched_fields is None else set(watched_fields)
         )
-        if watched_fields is not None:
-            if not (set(watched_fields) & set(self.model_fields)):
+        if watched_fields_set is not None:
+            if not (watched_fields_set & set(self.model_fields)):
                 raise ValueError(
-                    f'watched_fields {watched_fields} not in model fields {self.model_fields.keys()}'
+                    f'watched_fields {watched_fields_set} not in '
+                    f'model fields {self.model_fields.keys()}'
                 )
 
         self._update_actions.append(
-            UpdateAction(
-                watched_fields=watched_fields,
+            _UpdateAction(
+                watched_fields=watched_fields_set,
                 action=action,
                 priority=priority,
             )
         )
 
-    model_config: ClassVar[ApolloSettingsConfigDict] = (
+    model_config: ClassVar[ApolloSettingsConfigDict] = (  # type: ignore
         ApolloSettingsConfigDict(
             extra='forbid',
             arbitrary_types_allowed=True,
