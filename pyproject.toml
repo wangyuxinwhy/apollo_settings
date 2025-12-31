@@ -7,7 +7,7 @@ license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-    "requests>=2.0.0",
+    "httpx>=0.24.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
 ]
@@ -20,6 +20,10 @@ package = true
 
 [tool.ruff]
 line-length = 78
+exclude = ["playground", "api_docs"]
+target-version = "py38"
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -45,8 +49,6 @@ ignore = [
     "TRY003",  # Avoid specifying long messages outside the exception class
     "PLC0414", # reimport
 ]
-exclude = ["playground", "api_docs"]
-target-version = "py38"
 
 [tool.ruff.format]
 quote-style = "single"

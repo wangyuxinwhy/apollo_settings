@@ -1,15 +1,19 @@
 """Core module for Apollo Settings integration with Pydantic BaseSettings."""
 
+from __future__ import annotations
+
+import asyncio
 import logging
 import os
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import (
     Any,
+    AsyncIterator,
+    Awaitable,
     Callable,
     ClassVar,
     Iterable,
-    Iterator,
     List,
     Optional,
     Set,
@@ -32,10 +36,16 @@ _init_apollo_client_context_var: ContextVar[Optional[ApolloClient]] = (
 
 logger = logging.getLogger(__name__)
 
+# Type alias for callbacks that can be sync or async
+SettingsCallback = Union[
+    Callable[['ApolloSettings'], None],
+    Callable[['ApolloSettings'], Awaitable[None]],
+]
 
-@contextmanager
-def init_context(value: ApolloClient) -> Iterator[None]:
-    """Context manager for injecting a shared ApolloClient instance.
+
+@asynccontextmanager
+async def init_context(value: ApolloClient) -> AsyncIterator[None]:
+    """Async context manager for injecting a shared ApolloClient instance.
 
     Use this to share a single ApolloClient across multiple ApolloSettings
     instances, avoiding duplicate connections to the Apollo server.
@@ -49,9 +59,11 @@ def init_context(value: ApolloClient) -> Iterator[None]:
     Example:
         ```python
         client = ApolloClient(meta_url='...', app_id='...')
-        with init_context(client):
-            settings1 = MySettings()  # Uses shared client
-            settings2 = OtherSettings()  # Uses same client
+        async with init_context(client):
+            settings1 = MySettings()
+            await settings1.start()
+            settings2 = OtherSettings()
+            await settings2.start()
         ```
     """
     token = _init_apollo_client_context_var.set(value)
@@ -85,8 +97,10 @@ class _UpdateAction(BaseModel):
     """Internal model for tracking configuration change callbacks."""
 
     watched_fields: Union[Set[str], None]
-    action: Callable
+    action: SettingsCallback
     priority: int = 0
+
+    model_config = {'arbitrary_types_allowed': True}
 
     def model_post_init(self, __context: Any) -> None:
         if self.watched_fields is not None and len(self.watched_fields) == 0:
@@ -99,6 +113,9 @@ class ApolloSettings(BaseSettings):
     Automatically synchronizes configuration with Apollo Config server
     and supports callback registration for configuration changes.
 
+    This is an async-first implementation. You must call `start()` to begin
+    polling, or use the async context manager.
+
     Example:
         ```python
         class MySettings(ApolloSettings):
@@ -110,13 +127,21 @@ class ApolloSettings(BaseSettings):
                 app_id='my-app',
             )
 
+        # Option 1: Explicit start/stop
         settings = MySettings()
-        settings.on_change(lambda s: print(f'Debug: {s.debug}'), ['debug'])
+        await settings.start()
+        # ... use settings ...
+        await settings.stop()
+
+        # Option 2: Context manager
+        async with MySettings() as settings:
+            settings.on_change(lambda s: print(f'Debug: {s.debug}'), ['debug'])
         ```
     """
 
     _apollo_client: ApolloClient = PrivateAttr()
     _update_actions: List[_UpdateAction] = PrivateAttr(default_factory=list)
+    _owns_client: bool = PrivateAttr(default=False)
 
     def model_post_init(self, __context: Any) -> None:
         namespace = self.model_config.get('namespace', 'application')
@@ -140,26 +165,67 @@ class ApolloSettings(BaseSettings):
                 if key in self.model_config:
                     apollo_client_init_kwargs[key] = self.model_config[key]
             self._apollo_client = ApolloClient(**apollo_client_init_kwargs)
+            self._owns_client = True
             logger.info(
                 f'Auto init apollo client with {apollo_client_init_kwargs}'
             )
         else:
             self._apollo_client = apollo_client
+            self._owns_client = False
             if namespace not in self._apollo_client.namespaces:
                 raise ValueError(
                     f'{namespace} not in apollo client namespaces: '
                     f'{self._apollo_client.namespaces}'
                 )
 
+    async def start(self) -> Self:
+        """Start Apollo client polling.
+
+        Must be called in an async context to begin receiving configuration
+        updates from the Apollo server.
+
+        Returns:
+            Self for method chaining.
+
+        Example:
+            ```python
+            settings = MySettings()
+            await settings.start()
+            ```
+        """
+        namespace = self.model_config.get('namespace', 'application')
         subscriber = ApolloSubscriber(
             namespace=namespace, action=self._update_with_apollo_config
         )
         self._apollo_client.add_subscriber(subscriber)
-        self._apollo_client.start_polling()
+        await self._apollo_client.start_polling()
+        return self
 
-    def _update_with_apollo_config(self, config: ApolloConfig) -> None:
+    async def stop(self) -> None:
+        """Stop Apollo client polling and cleanup resources.
+
+        Should be called when the settings instance is no longer needed
+        to properly cleanup background tasks.
+        """
+        if self._owns_client:
+            await self._apollo_client.stop_polling()
+
+    async def __aenter__(self) -> Self:
+        """Enter async context manager."""
+        return await self.start()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        """Exit async context manager."""
+        await self.stop()
+
+    async def _update_with_apollo_config(self, config: ApolloConfig) -> None:
         updated_fields: set[str] = set()
-        for field in self.model_fields:
+        for field in self.__class__.model_fields:
             if (apollo_value := config.get(field, None)) is not None:
                 if apollo_value.update:
                     updated_fields.add(field)
@@ -168,25 +234,48 @@ class ApolloSettings(BaseSettings):
             self._update_actions, key=lambda x: x.priority, reverse=True
         ):
             if update_action.watched_fields is None:
-                update_action.action(self)
+                if asyncio.iscoroutinefunction(update_action.action):
+                    await update_action.action(self)
+                else:
+                    update_action.action(self)
             elif update_action.watched_fields & updated_fields:
-                update_action.action(self)
+                if asyncio.iscoroutinefunction(update_action.action):
+                    await update_action.action(self)
+                else:
+                    update_action.action(self)
 
     def on_change(
         self,
-        action: Callable[[Self], None],
+        action: SettingsCallback,
         watched_fields: Union[Iterable[str], None],
         priority: int = 0,
     ) -> None:
         """Register a callback for configuration changes.
 
+        The callback can be either a sync or async function.
+
         Args:
             action: Callback function receiving the settings instance.
+                Can be sync (def) or async (async def).
             watched_fields: Field names to watch. If None, triggers on any change.
             priority: Higher priority callbacks execute first.
 
         Raises:
             ValueError: If watched_fields contains invalid field names.
+
+        Example:
+            ```python
+            # Sync callback
+            def on_debug_change(settings: MySettings):
+                print(f'Debug changed to: {settings.debug}')
+
+            # Async callback
+            async def on_url_change(settings: MySettings):
+                await reconnect_database(settings.database_url)
+
+            settings.on_change(on_debug_change, ['debug'])
+            settings.on_change(on_url_change, ['database_url'])
+            ```
         """
         watched_fields_set = (
             None if watched_fields is None else set(watched_fields)

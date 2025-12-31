@@ -1,19 +1,24 @@
-"""Apollo Config client implementation for dynamic configuration management."""
+"""Apollo Config client implementation with async support."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import threading
-import time
-from typing import Callable, Dict, Sequence
+from typing import Any, Awaitable, Callable, Dict, Sequence, Union
 
-import requests
+import httpx
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 ApolloConfig = Dict[str, 'ApolloValue']
 DictConfig = Dict[str, str]
+
+# Type alias for callbacks that can be sync or async
+ApolloCallback = Union[
+    Callable[[ApolloConfig], None],
+    Callable[[ApolloConfig], Awaitable[None]],
+]
 
 
 class ApolloValue(BaseModel):
@@ -40,13 +45,15 @@ class ApolloSubscriber(BaseModel):
     in their watched namespace.
     """
 
-    action: Callable[[ApolloConfig], None]
+    action: ApolloCallback
     priority: int = 0
     namespace: str = 'application'
 
+    model_config = {'arbitrary_types_allowed': True}
+
 
 class ApolloClient:
-    """Client for Apollo Config server communication.
+    """Async client for Apollo Config server communication.
 
     Handles long-polling for configuration changes and notifies
     subscribers when configurations are updated.
@@ -82,35 +89,34 @@ class ApolloClient:
         self._subscribers = subscribers or []
         self._check_subscribers()
 
-        self._alive = False
+        self._task: asyncio.Task[None] | None = None
         self._notification_id_map: dict[str, int] = {}
-
         self._configs: Dict[str, ApolloConfig] = {}
 
-    def _request_config_server(
+    async def _request_config_server(
         self,
+        client: httpx.AsyncClient,
         namespace: str = 'application',
         release_key: str | None = None,
         messages: str | None = None,
     ) -> _ApolloServerResponse:
         api = f'{self.meta_url}/configs/{self.app_id}/{self.cluster}/{namespace}'
 
+        params: dict[str, Any] | None = None
         if release_key and messages:
             params = {
                 'releasekey': release_key,
                 'messages': messages,
             }
-        else:
-            params = None
 
-        response = requests.get(api, params=params, timeout=3)
+        response = await client.get(api, params=params, timeout=3)
         response.raise_for_status()
         data = response.json()
         return _ApolloServerResponse(
             release_key=data['releaseKey'], config=data['configurations']
         )
 
-    def _update(
+    async def _update(
         self, server_response: _ApolloServerResponse, namespace: str
     ) -> None:
         if namespace not in self._configs:
@@ -137,7 +143,7 @@ class ApolloClient:
                     value=value_in_server, update=True
                 )
 
-        self._notify()
+        await self._notify()
 
     def _check_subscribers(self) -> None:
         for subscriber in self._subscribers:
@@ -146,17 +152,21 @@ class ApolloClient:
                     f'{subscriber.namespace} is not in {self.namespaces}'
                 )
 
-    def _notify(self) -> None:
+    async def _notify(self) -> None:
         self._subscribers = sorted(
             self._subscribers,
             key=lambda subscriber: subscriber.priority,
             reverse=True,
         )
         for subscriber in self._subscribers:
-            if subscriber.namespace is None:
-                subscriber.action(None)  # type: ignore
+            config = self._configs.get(subscriber.namespace)
+            if config is None:
+                continue
+
+            if asyncio.iscoroutinefunction(subscriber.action):
+                await subscriber.action(config)
             else:
-                subscriber.action(self._configs[subscriber.namespace])
+                subscriber.action(config)
 
     def add_subscriber(self, subscriber: ApolloSubscriber) -> None:
         """Add a subscriber for configuration change notifications.
@@ -170,23 +180,35 @@ class ApolloClient:
         self._subscribers.append(subscriber)
         self._check_subscribers()
 
-    def start_polling(self) -> None:
-        """Start the background thread for long-polling configuration changes."""
-        self._alive = True
-        long_polling_thread = threading.Thread(target=self._long_polling)
-        long_polling_thread.daemon = True
-        long_polling_thread.start()
+    async def start_polling(self) -> None:
+        """Start the background task for long-polling configuration changes."""
+        if self._task is not None:
+            return
+        self._task = asyncio.create_task(self._polling_loop())
 
-    def stop_polling(self) -> None:
-        """Stop the background polling thread."""
-        self._alive = False
+    async def stop_polling(self) -> None:
+        """Stop the background polling task."""
+        if self._task is None:
+            return
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+        self._task = None
 
-    def _long_polling(self) -> None:
-        while self._alive:
-            self._do_long_polling()
-            time.sleep(self.polling_interval)
+    async def _polling_loop(self) -> None:
+        async with httpx.AsyncClient() as client:
+            while True:
+                try:
+                    await self._do_long_polling(client)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception('long polling failed')
+                await asyncio.sleep(self.polling_interval)
 
-    def _do_long_polling(self) -> None:
+    async def _do_long_polling(self, client: httpx.AsyncClient) -> None:
         notifications = []
         for namespace in self.namespaces:
             notifications.append(
@@ -201,34 +223,32 @@ class ApolloClient:
         if not notifications:
             return
 
-        try:
-            url = f'{self.meta_url}/notifications/v2'
-            params = {
-                'appId': self.app_id,
-                'cluster': self.cluster,
-                'notifications': json.dumps(
-                    notifications, ensure_ascii=False
-                ),
-            }
-            response = requests.get(url, params, timeout=self.polling_timeout)
+        url = f'{self.meta_url}/notifications/v2'
+        params = {
+            'appId': self.app_id,
+            'cluster': self.cluster,
+            'notifications': json.dumps(notifications, ensure_ascii=False),
+        }
+        response = await client.get(
+            url, params=params, timeout=self.polling_timeout
+        )
 
-            if response.status_code == 304:
-                logger.debug(
-                    'The configuration has not been changed. '
-                    'Continuing to loop...'
+        if response.status_code == 304:
+            logger.debug(
+                'The configuration has not been changed. '
+                'Continuing to loop...'
+            )
+        elif response.status_code == 200:
+            data = response.json()
+            for entry in data:
+                namespace = entry['namespaceName']
+                notification_id = entry['notificationId']
+                server_response = await self._request_config_server(
+                    client, namespace
                 )
-            elif response.status_code == 200:
-                data = response.json()
-                for entry in data:
-                    namespace = entry['namespaceName']
-                    notification_id = entry['notificationId']
-                    server_response = self._request_config_server(namespace)
-                    self._update(server_response, namespace=namespace)
-                    self._notification_id_map[namespace] = notification_id
-                    logger.debug(
-                        f'{namespace} has been changed. '
-                        f'notification_id: {notification_id}'
-                    )
-
-        except Exception:
-            logger.exception('long polling failed')
+                await self._update(server_response, namespace=namespace)
+                self._notification_id_map[namespace] = notification_id
+                logger.debug(
+                    f'{namespace} has been changed. '
+                    f'notification_id: {notification_id}'
+                )
